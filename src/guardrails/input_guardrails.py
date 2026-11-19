@@ -8,15 +8,16 @@ Status convention (không dùng True/False mơ hồ):
   ``"BLOCK"`` = chặn / không cho qua
   ``"ALLOW"`` = cho qua
 """
+
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Literal
 
 from google.genai import types
 from google.adk.plugins import base_plugin
 from google.adk.agents.invocation_context import InvocationContext
-
 from core.config import ALLOWED_TOPICS, BLOCKED_TOPICS
 
 # Quyết định rõ ràng — tránh đảo nghĩa True/False
@@ -41,9 +42,43 @@ InputStatus = Literal["ALLOW", "BLOCK"]
 # summarize an external bank-transfer email just because it is external data.
 # Regex is one signal, not the whole security boundary.
 # ============================================================
+def normalize_input(value: str | bytes) -> str:
+    # Strict UTF-8 decoding
+    # (Giải mã UTF-8 nghiêm ngặt, báo lỗi nếu byte không hợp lệ.)
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="strict")
+
+    # Unicode normalization
+    # (Đưa các dạng ký tự tương đương về dạng thống nhất.)
+    text = unicodedata.normalize("NFKC", value)
+
+    # Remove invisible formatting characters
+    # (Loại ký tự định dạng ẩn, giữ nguyên dấu tiếng Việt.)
+    text = "".join(
+        char
+        for char in text
+        if unicodedata.category(char) != "Cf"
+    )
+
+    # Normalize case and whitespace
+    # (Chuẩn hóa chữ hoa/thường và khoảng trắng.)
+    return " ".join(text.casefold().split())
+def normalize_topic(text: str) -> str:
+    text = normalize_input(text)
+
+    text = unicodedata.normalize("NFD", text)
+
+    text = "".join(
+        char
+        for char in text
+        if unicodedata.category(char) != "Mn"
+    )
+
+    return text.replace("đ", "d")
 
 def detect_injection(user_input: str) -> InputStatus:
     """Detect prompt injection patterns in user input.
+    (Phát hiện mẫu chỉ dẫn thao túng AI trong nội dung đầu vào.)
 
     Args:
         user_input: The user's message
@@ -51,14 +86,70 @@ def detect_injection(user_input: str) -> InputStatus:
     Returns:
         ``"BLOCK"`` if injection detected (chặn), ``"ALLOW"`` otherwise (cho qua).
     """
+    # Unicode normalization
+    # (Chuẩn hóa ký tự tương đương, ví dụ chữ có độ rộng toàn phần.)
+    normalized = unicodedata.normalize("NFKC", user_input)
+    # Remove invisible formatting characters without splitting words.
+    # (Loại ký tự định dạng ẩn mà không tách một từ thành hai từ.)
+    normalized = "".join(
+        char for char in normalized if unicodedata.category(char) != "Cf"
+    )
+    # Collapse whitespace
+    # (Gộp khoảng trắng, tab và xuống dòng thành một dấu cách.)
+    normalized = " ".join(normalized.casefold().split())
+
     INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
+        # Ignore previous instructions
+        # (Bỏ qua các chỉ dẫn trước đó.)
+        r"\bignore\s+(?:all\s+)?(?:(?:previous|above)\s+)?instructions\b",
+        # Override the assistant's identity
+        # (Gán lại danh tính hoặc vai trò của trợ lý.)
+        r"\byou\s+are\s+now\b",
+        # Request the system prompt
+        # (Yêu cầu nội dung chỉ dẫn hệ thống.)
+        r"\bsystem\s+prompt\b",
+        # Reveal internal instructions
+        # (Tiết lộ chỉ dẫn nội bộ.)
+        r"\breveal\s+your\s+(?:instructions|prompt)\b",
+        # Pretend to be another assistant
+        # (Giả làm một trợ lý khác.)
+        r"\bpretend\s+you\s+are\b",
+        # Act without restrictions
+        # (Đóng vai không bị ràng buộc.)
+        r"\bact\s+as\s+(?:(?:a|an)\s+)?unrestricted\b",
+        # 1. Bỏ qua chỉ dẫn trước đó
+r"\bbỏ\s+qua\s+(?:(?:mọi|các|tất\s+cả)\s+)?(?:chỉ\s+dẫn|hướng\s+dẫn|quy\s+tắc)\s+(?:trước\s+đó|trước\s+đây|cũ)\b",
+
+# 2. Quên các quy tắc
+r"\bquên\s+(?:(?:mọi|các|tất\s+cả)\s+)?(?:quy\s+tắc|chỉ\s+dẫn|hướng\s+dẫn)\b",
+
+# 3. Vô hiệu hóa lớp bảo vệ
+r"\b(?:tắt|vô\s+hiệu\s+hóa)\s+(?:(?:các|mọi)\s+)?(?:bộ\s+lọc|lớp\s+bảo\s+vệ|cơ\s+chế\s+bảo\s+mật)\b",
+
+# 4. Đóng vai AI không bị giới hạn
+r"\b(?:đóng\s+vai|giả\s+làm)\s+(?:một\s+)?(?:ai|trợ\s+lý)\s+không\s+(?:bị\s+)?(?:giới\s+hạn|ràng\s+buộc|kiểm\s+duyệt)\b",
+
+# 5. Tiết lộ chỉ dẫn hệ thống
+r"\b(?:tiết\s+lộ|hiển\s+thị|in\s+ra|cho\s+(?:tôi|mình)\s+xem)\s+(?:toàn\s+bộ\s+)?(?:chỉ\s+dẫn|lời\s+nhắc)\s+hệ\s+thống\b",
+
+# 6. Tiết lộ mật khẩu quản trị
+r"\b(?:tiết\s+lộ|hiển\s+thị|cung\s+cấp|cho\s+(?:tôi|mình)\s+xem)\s+(?:giá\s+trị\s+)?mật\s+khẩu\s+(?:quản\s+trị|nội\s+bộ|admin)\b",
+
+# 7. Tiết lộ khóa API
+r"\b(?:tiết\s+lộ|hiển\s+thị|in\s+ra|cung\s+cấp)\s+(?:giá\s+trị\s+)?khóa\s+api\b",
+
+# 8. Lấy thông tin kết nối cơ sở dữ liệu
+r"\b(?:tiết\s+lộ|hiển\s+thị|cung\s+cấp)\s+thông\s+tin\s+kết\s+nối\s+(?:cơ\s+sở\s+dữ\s+liệu|database)\b",
+
+# 9. Tự nhận quyền quản trị để yêu cầu bỏ kiểm tra
+r"\b(?:tôi|mình)\s+là\s+quản\s+trị\s+viên\b.{0,80}\bbỏ\s+qua\s+(?:bước\s+)?(?:kiểm\s+tra|xác\s+thực)\b",
+
+# 10. Mã hóa secret để né phát hiện
+r"\b(?:mã\s+hóa|chuyển)\s+(?:mật\s+khẩu|khóa\s+api|thông\s+tin\s+bí\s+mật)\s+(?:sang|thành|bằng)\s+(?:base64|hex|rot13)\b",
     ]
 
     for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, user_input, re.IGNORECASE):
+        if re.search(pattern, normalized, re.IGNORECASE):
             return "BLOCK"
     return "ALLOW"
 
@@ -84,14 +175,21 @@ def topic_filter(user_input: str) -> InputStatus:
         ``"BLOCK"`` = chặn (off-topic hoặc topic cấm).
         ``"ALLOW"`` = cho qua (câu banking hợp lệ).
     """
-    input_lower = user_input.lower()
+    text = normalize_topic(user_input)
+    for topic in BLOCKED_TOPICS:
+        keyword = normalize_topic(topic)
+        pattern = rf"\b{re.escape(keyword)}\b"
 
-    # TODO: Implement logic:
-    # 1. If input contains any blocked topic -> return "BLOCK"
-    # 2. If input doesn't contain any allowed topic -> return "BLOCK"
-    # 3. Otherwise -> return "ALLOW"
+        if re.search(pattern, text):
+            return "BLOCK"
+        
+    for topic in ALLOWED_TOPICS:
+        keyword = normalize_topic(topic)
+        pattern = rf"\b{re.escape(keyword)}\b"
 
-    pass  # Replace with your implementation
+        if re.search(pattern, text):
+            return "ALLOW"
+    return "BLOCK"
 
 
 # ============================================================
@@ -144,16 +242,14 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         self.total_count += 1
         text = self._extract_text(user_message)
 
-        # TODO: Implement logic:
-        # 1. Call detect_injection(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 2. Call topic_filter(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 3. If both return "ALLOW": return None (let message through)
+        if detect_injection(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response("trình em chưa đủ để tìm lỗ hỏng của anh đâu em ơi !!!!!!")
 
-        pass  # Replace with your implementation
-
-
+        if topic_filter(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response("nói chuyện về ngân hàng đi thì anh trả lời nhá đừng có lợi dụng tìm thông tin, anh không dễ lừa đâu")
+        return None  # Allow the message to pass through
 # ============================================================
 # Quick tests
 # ============================================================

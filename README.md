@@ -6,6 +6,54 @@
 
 ---
 
+## Tùy chỉnh CP1: Blue gọi Liquid trực tiếp
+
+Đây là tùy chỉnh **theo yêu cầu của người dùng**. Starter và quy định nộp bài
+yêu cầu Blue dùng OpenRouter `liquid/lfm-3-1.7b:free`; chuyển sang Liquid trực tiếp
+có thể ảnh hưởng quy định chấm. Cần đối chiếu với Key Coach trước khi nộp.
+Red/Red Advance vẫn giữ provider và model của starter.
+
+Đã xác minh ngày 19/11/2026 từ [Quickstart chính thức](https://docs.liquid.ai/api/quickstart),
+[API models](https://docs.liquid.ai/api/models) và [Text generation](https://docs.liquid.ai/api/guides/text-generation):
+
+- SDK: `openai`; xác thực `Authorization: Bearer <LIQUID_API_KEY>`.
+- Base URL: `https://api.liquid.ai/openai/v1`; chat: `POST /openai/v1/chat/completions`.
+- Model Blue tương ứng: `lfm3-1.7b`. Đây là ID Liquid công bố, không dùng ID OpenRouter.
+- Các model sinh nội dung được công bố: `lfm3-1.7b`, `lfm3-vl-2b`,
+  `lfm3-audio-2b`, `lfm3-omni-2b`, `lfm2.5-24b-a2b`.
+  Quyền truy cập thực tế tùy tổ chức; `GET /openai/v1/models` liệt kê model được gọi.
+
+Điền trực tiếp trong `.env` local (không gửi key qua hội thoại):
+`LIQUID_API_KEY`, `LIQUID_BASE_URL=https://api.liquid.ai/openai/v1`,
+`LIQUID_MODEL=lfm3-1.7b`. Giữ `RED_TEAM_PROVIDER=openai` và điền `OPENAI_API_KEY`,
+hoặc chủ động chọn `gemini` và điền `GOOGLE_API_KEY`. Key placeholder bị từ chối;
+chương trình không hỏi nhập key qua terminal. `.env` và `.venv` đã được Git bỏ qua.
+
+Key được kiểm tra riêng theo checkpoint:
+
+- `python src/main.py --part 2`: kiểm tra bộ lọc và callback cục bộ, không gọi
+  model, không yêu cầu key Liquid/OpenAI/Gemini. Judge/NeMo tùy chọn được bỏ qua.
+- `--part 3`: Blue gọi Liquid, chỉ cần `LIQUID_API_KEY`.
+- `--part 4`: Red/Red Advance chỉ cần key của `RED_TEAM_PROVIDER`:
+  `OPENAI_API_KEY` cho `openai`, hoặc `GOOGLE_API_KEY` cho `gemini`.
+  Không yêu cầu key Liquid và không chuyển Red sang Liquid.
+- Không chỉ định `--part`: chạy CP2 → CP3 → CP4; kiểm tra key khi đến phần cần nó.
+
+Nếu thiếu key Liquid, điền trực tiếp `LIQUID_API_KEY` trong `.env` trước CP3;
+không gửi key qua hội thoại. CP2 vẫn chạy được khi chưa điền key nào.
+
+Kiểm tra setup sau khi kích hoạt `.venv`:
+
+```powershell
+python -m pip check
+python -c "import openai, google.adk, google.genai, nemoguardrails; print('SDK imports OK')"
+python -m pytest tests/smoke -q
+# Chỉ chạy khi đã điền key: một chat request nhỏ mỗi provider được cấu hình, không retry.
+python scripts/check_provider_connection.py
+```
+
+CP2–CP4 vẫn là starter chưa hoàn thiện. Setup không sinh `outputs/*.json`.
+
 ## Thời lượng
 
 | Phần | Thời gian |
@@ -23,7 +71,7 @@
 1. Máy có **Python 3.10+** (khuyến nghị 3.11 hoặc 3.12) và Git.
 2. Tài khoản GitHub cá nhân (để fork + đổi tên repo nộp).
 3. API keys:
-   - **Blue (bắt buộc):** [OpenRouter](https://openrouter.ai/keys) — model cố định [`liquid/lfm-3-1.7b:free`](https://openrouter.ai/liquid/lfm-3-1.7b:free)
+   - **Blue (bắt buộc):** [Liquid Console](https://console.liquid.ai) — model cố định [`lfm3-1.7b`](https://docs.liquid.ai/api/models)
    - **Red (chọn một provider):** [OpenAI](https://platform.openai.com/api-keys) (`gpt-4o-mini`) **hoặc** [Google AI Studio](https://aistudio.google.com/apikey) (`gemini-3.5-flash`)
 4. Đọc nhanh [`RULES.md`](RULES.md) và [`RUBRIC.md`](RUBRIC.md).
 
@@ -56,7 +104,7 @@ Bonus lab chỉ tính **một** trong hai: leak **Red** (B1, tối đa +5) hoặ
 
 | Agent                     | Provider / model                                                                     |
 | ------------------------- | ------------------------------------------------------------------------------------ |
-| **Blue**                  | OpenRouter `liquid/lfm-3-1.7b:free` (khóa cứng)                                         |
+| **Blue**                  | Liquid API `lfm3-1.7b` (mặc định; `LIQUID_MODEL` trong `.env`) |
 | **Red** + **Red Advance** | Cùng provider: `gpt-4o-mini` **hoặc** `gemini-3.5-flash` (model mềm — điểm bắt buộc) |
 | Model khó (tuỳ chọn)      | `gpt-5.6-luna` / `gemini-3.8-flash` — **không** phải tên agent                       |
 
@@ -142,10 +190,10 @@ Thứ tự làm: **Setup → Blue Team (xây Guardrails phòng thủ) → Red Te
 **Windows (PowerShell):**
 
 ```powershell
-python -m venv .venv
+& "C:\Users\Admin\AppData\Local\Python\pythoncore-3.11-64\python.exe" -m venv .venv
 .\.venv\Scripts\Activate.ps1
 # Nếu bị chặn: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-Copy-Item .env.example .env
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 pip install -r requirements.txt
 ```
 
@@ -154,11 +202,11 @@ pip install -r requirements.txt
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-cp .env.example .env
+test -f .env || cp .env.example .env
 pip install -r requirements.txt
 ```
 
-Điền `.env`: `OPENROUTER_API_KEY` + `RED_TEAM_PROVIDER=openai|gemini` (và key tương ứng).  
+Điền `.env`: `LIQUID_API_KEY` + `RED_TEAM_PROVIDER=openai|gemini` (và key tương ứng).
 Rồi mở [`CHECKPOINTS.md`](CHECKPOINTS.md) và làm lần lượt Checkpoint 1 → 5.
 
 Nộp theo [`SUBMISSION.md`](SUBMISSION.md) · Quy định: [`RULES.md`](RULES.md).
